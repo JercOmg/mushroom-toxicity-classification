@@ -8,6 +8,10 @@ seaborn>=0.12.0
 
 # Machine Learning y Preprocesamiento
 scikit-learn>=1.3.0
+xgboost>=2.0.0
+shap>=0.42.0
+lime>=0.2.0
+joblib>=1.3.0
 
 # Entorno de experimentación
 jupyter>=1.0.0
