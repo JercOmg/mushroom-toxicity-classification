@@ -1,0 +1,31 @@
+# Entornos virtuales de Python
+.venv/
+venv/
+env/
+ENV/
+
+# Archivos de caché y compilados
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Archivos pesados / comprimidos temporales
+*.zip
+*.tar.gz
+*.rar
+
+# Modelos exportados grandes (opcional)
+*.joblib
+*.pkl
+*.h5
+
+# Archivos del sistema y del editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

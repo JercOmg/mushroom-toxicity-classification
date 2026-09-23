@@ -9,10 +9,11 @@ import matplotlib.pyplot as plt
 # ============================================================
 
 DATASET_PATH = Path(
-    "MushroomDataset/MushroomDataset/secondary_data.csv"
+    "data/raw/secondary_data.csv"
 )
 
-RESULTADOS_PATH = Path("resultados")
+PROCESSED_PATH = Path("data/processed")
+RESULTADOS_PATH = Path("docs/resultados_eda")
 
 TARGET = "class"
 
@@ -23,8 +24,13 @@ COLUMNAS_NUMERICAS = [
 ]
 
 
-# Crear carpeta de resultados
+# Crear carpetas de salida si no existen
+PROCESSED_PATH.mkdir(
+    parents=True,
+    exist_ok=True
+)
 RESULTADOS_PATH.mkdir(
+    parents=True,
     exist_ok=True
 )
 
@@ -637,7 +643,7 @@ for columna in COLUMNAS_NUMERICAS:
 # ------------------------------------------------------------
 
 ARCHIVO_ESTANDARIZADO = (
-    RESULTADOS_PATH
+    PROCESSED_PATH
     / "secondary_mushroom_estandarizado.csv"
 )
 
