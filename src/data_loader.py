@@ -55,3 +55,37 @@ def get_train_test_data(
     return train_test_split(
         X, y, test_size=test_size, random_state=random_state, stratify=y
     )
+
+
+def get_train_val_test_data(
+    df: pd.DataFrame,
+    train_size: float = 0.70,
+    val_size: float = 0.15,
+    test_size: float = 0.15,
+    random_state: int = 42,
+    target_col: str = TARGET_COLUMN
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series]:
+    """
+    Realiza la partición de datos en tres conjuntos: Entrenamiento (Train),
+    Validación (Validation) y Prueba (Test), garantizando la estratificación
+    de la variable objetivo en todas las particiones.
+    """
+    if not (0.999 <= train_size + val_size + test_size <= 1.001):
+        raise ValueError("La suma de train_size, val_size y test_size debe ser igual a 1.0")
+
+    X, y = split_features_target(df, target_col=target_col)
+
+    # Primer split: separar Train del resto (Val + Test)
+    temp_size = val_size + test_size
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X, y, test_size=temp_size, random_state=random_state, stratify=y
+    )
+
+    # Segundo split: dividir temp en Validation y Test
+    val_relative_size = val_size / temp_size
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp, train_size=val_relative_size, random_state=random_state, stratify=y_temp
+    )
+
+    return X_train, X_val, X_test, y_train, y_val, y_test
+
