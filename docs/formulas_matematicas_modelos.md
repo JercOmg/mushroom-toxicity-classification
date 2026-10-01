@@ -29,7 +29,9 @@ $$J(\mathbf{w}) = -\frac{1}{N} \sum_{i=1}^N \left[ y_i \ln(\sigma(\mathbf{w}^T \
 ### 1.3 Regla de Decisión y Umbral Asimétrico ($\tau$)
 $$\hat{y} = \begin{cases} 1 & \text{si } P(Y=1 \mid \mathbf{x}) \ge \tau \\ 0 & \text{si } P(Y=1 \mid \mathbf{x}) < \tau \end{cases}$$
 
-Bajo el enfoque estándar $\tau = 0.50$. En nuestra **metodología de riesgo cero**, calibramos $\tau^* < 0.50$ para garantizar $FN = 0$.
+Bajo el enfoque estándar $\tau = 0.50$. En nuestra **metodología de riesgo cero**, $\tau^*$ se calibra sobre el modelo que se despliega en producción: la Regresión Logística ilustra el efecto con $\tau^* < 0.50$; el modelo ganador (Random Forest) opera con $\tau^* = 0.67$ en la rejilla extendida $\tau \in [0.01, 0.95]$ — ver §5.3.
+
+![Sigmoide y Binary Cross-Entropy](figuras_modelo_matematico/esquema_sigmoide_bce.png)
 
 ---
 
@@ -57,6 +59,8 @@ Dado un bosque de $B$ árboles $\{T_1, T_2, \dots, T_B\}$:
 
 - **Predicción final por votación de mayoría:**
   $$\hat{y} = \text{moda} \left\{ T_1(\mathbf{x}), T_2(\mathbf{x}), \dots, T_B(\mathbf{x}) \right\}$$
+
+![Árbol CART y agregación bagging de Random Forest](figuras_modelo_matematico/esquema_arbol_bosque.png)
 
 ---
 
@@ -91,6 +95,8 @@ $$h_i = \frac{\partial^2 l(y_i, \hat{y}^{(t-1)})}{\partial (\hat{y}^{(t-1)})^2} 
 
 - **Ganancia de división para evaluar cortes:**
   $$\text{Gain} = \frac{1}{2} \left[ \frac{\left( \sum_{i \in I_L} g_i \right)^2}{\sum_{i \in I_L} h_i + \lambda} + \frac{\left( \sum_{i \in I_R} g_i \right)^2}{\sum_{i \in I_R} h_i + \lambda} - \frac{\left( \sum_{i \in I} g_i \right)^2}{\sum_{i \in I} h_i + \lambda} \right] - \gamma$$
+
+![Modelo aditivo secuencial de XGBoost](figuras_modelo_matematico/esquema_boosting.png)
 
 ---
 
@@ -127,6 +133,8 @@ $$\hat{m}_t = \frac{m_t}{1 - \beta_1^t}, \quad \hat{v}_t = \frac{v_t}{1 - \beta_
 Regla de actualización:
 $$\theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{\hat{v}_t} + \epsilon} \hat{m}_t$$
 
+![Arquitectura del Perceptrón Multicapa](figuras_modelo_matematico/esquema_mlp.png)
+
 ---
 
 ## 5. Métricas de Evaluación y Calibración de Costos
@@ -147,7 +155,38 @@ Dada la matriz de confusión con Verdaderos Positivos ($TP$), Falsos Negativos (
   $$\text{F1} = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}} = \frac{2 TP}{2 TP + FP + FN}$$
 
 ### 5.2 Formulación Matemática del Umbral de Riesgo Cero ($\tau^*$)
-$$\tau^* = \max \left\{ \tau \in (0, 0.50] \;\middle|\; FN(\tau) = 0 \right\}$$
+$$\tau^* = \max \left\{ \tau \in (0, 0.95] \;\middle|\; FN(\tau) = 0 \right\}$$
 
 Donde:
 $$FN(\tau) = \sum_{i=1}^N \mathbb{I}\left( y_i = 1 \;\land\; P(Y=1 \mid \mathbf{x}_i) < \tau \right)$$
+
+El barrido se realiza sobre la rejilla $\tau \in [0.01, 0.95]$ con paso $0.01$ usando las probabilidades del **modelo ganador** en validación. Extender la búsqueda por encima del umbral por defecto ($0.50$) permite maximizar la precisión sin romper la garantía de $FN = 0$: a mayor $\tau$, menos falsos positivos, mientras el recall de la clase venenosa permanezca en 100 %.
+
+**Resultado de la calibración (Random Forest, modelo ganador):** $\tau^* = 0.67$, con $FN(\tau^*) = 0$ y recall de la clase venenosa del 100 % en validación.
+
+### 5.3 Evidencia Empírica en el Conjunto de Prueba (Test)
+
+Los gráficos siguientes son generados por `notebooks/03_model_training.ipynb` sobre el conjunto de prueba (datos nunca vistos durante el entrenamiento) y el script `generar_figuras_modelo.py`.
+
+**Comparativa de los 4 modelos en test** — 3 de 4 superan la precisión del 95 % exigida; el ganador (Random Forest) se seleccionó con el criterio jerárquico $FN=0 \to F1 \to \text{ROC-AUC} \to$ tiempo de entrenamiento:
+
+| Modelo | Accuracy | Precision | Recall (venenoso) | F1 | ROC-AUC | FN |
+|---|---|---|---|---|---|---|
+| Logistic Regression | 0.8670 | 0.8817 | 0.8782 | 0.8800 | 0.9363 | 619 |
+| **Random Forest (ganador)** | **1.0000** | **1.0000** | **1.0000** | **1.0000** | **1.0000** | **0** |
+| XGBoost | 0.9940 | 0.9978 | 0.9913 | 0.9946 | 0.9999 | 44 |
+| MLP Neural Network | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0 |
+
+![Comparación de rendimiento de los 4 modelos en test](figuras_modelo_matematico/comparacion_modelos_test.png)
+
+![Curvas ROC en el conjunto de prueba](figuras_modelo_matematico/curvas_roc_test.png)
+
+![Matrices de confusión de los 4 modelos en test](figuras_modelo_matematico/matrices_confusion_test.png)
+
+**Calibración del umbral de riesgo cero** sobre el modelo ganador:
+
+![Ajuste asimétrico de umbral del modelo ganador](figuras_modelo_matematico/ajuste_umbral_modelo_ganador.png)
+
+**Explicabilidad global (SHAP)** — las variables morfológicas que más aportan a la clase venenosa:
+
+![Importancia global SHAP](figuras_modelo_matematico/shap_importancia_test.png)
