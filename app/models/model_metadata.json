@@ -1,0 +1,307 @@
+{
+    "model_name": "Random Forest",
+    "model_class": "RandomForestClassifier",
+    "selection_criteria": "FN=0 en test (riesgo cero) -> F1-Score -> ROC-AUC -> menor tiempo de entrenamiento",
+    "optimal_threshold": 0.67,
+    "classes": {
+        "0": "edible",
+        "1": "poisonous"
+    },
+    "numeric_features": [
+        "cap-diameter",
+        "stem-height",
+        "stem-width"
+    ],
+    "categorical_features": [
+        "cap-shape",
+        "cap-surface",
+        "cap-color",
+        "does-bruise-or-bleed",
+        "gill-attachment",
+        "gill-spacing",
+        "gill-color",
+        "stem-root",
+        "stem-surface",
+        "stem-color",
+        "veil-type",
+        "veil-color",
+        "has-ring",
+        "ring-type",
+        "spore-print-color",
+        "habitat",
+        "season"
+    ],
+    "num_features_encoded": 128,
+    "trained_at": "2026-10-01T15:42:23",
+    "validation_metrics": [
+        {
+            "Model": "Logistic Regression",
+            "Accuracy": 0.868122270742358,
+            "Precision": 0.8845008930343322,
+            "Recall (Poisonous)": 0.8768443832382451,
+            "F1-Score": 0.8806559968385694,
+            "FN (Falsos Negativos)": 626,
+            "FP (Falsos Positivos)": 582,
+            "Train Time (s)": 1.45
+        },
+        {
+            "Model": "Random Forest",
+            "Accuracy": 1.0,
+            "Precision": 1.0,
+            "Recall (Poisonous)": 1.0,
+            "F1-Score": 1.0,
+            "FN (Falsos Negativos)": 0,
+            "FP (Falsos Positivos)": 0,
+            "Train Time (s)": 1.25
+        },
+        {
+            "Model": "XGBoost",
+            "Accuracy": 0.9935589519650655,
+            "Precision": 0.9978200554894966,
+            "Recall (Poisonous)": 0.9905567578201849,
+            "F1-Score": 0.9941751406851614,
+            "FN (Falsos Negativos)": 48,
+            "FP (Falsos Positivos)": 11,
+            "Train Time (s)": 2.14
+        },
+        {
+            "Model": "MLP Neural Network",
+            "Accuracy": 1.0,
+            "Precision": 1.0,
+            "Recall (Poisonous)": 1.0,
+            "F1-Score": 1.0,
+            "FN (Falsos Negativos)": 0,
+            "FP (Falsos Positivos)": 0,
+            "Train Time (s)": 3.73
+        }
+    ],
+    "test_metrics": [
+        {
+            "Model": "Logistic Regression",
+            "Accuracy": 0.8670450824145836,
+            "Precision": 0.8817140600315956,
+            "Recall (Poisonous)": 0.8782454760031472,
+            "F1-Score": 0.8799763500197083,
+            "ROC-AUC": 0.9363477005488563,
+            "FN (Falsos Negativos)": 619,
+            "FP (Falsos Positivos)": 599,
+            "Train Time (s)": 1.45
+        },
+        {
+            "Model": "Random Forest",
+            "Accuracy": 1.0,
+            "Precision": 1.0,
+            "Recall (Poisonous)": 1.0,
+            "F1-Score": 1.0,
+            "ROC-AUC": 1.0,
+            "FN (Falsos Negativos)": 0,
+            "FP (Falsos Positivos)": 0,
+            "Train Time (s)": 1.25
+        },
+        {
+            "Model": "XGBoost",
+            "Accuracy": 0.9939962886147801,
+            "Precision": 0.9978222134230845,
+            "Recall (Poisonous)": 0.991345397324941,
+            "F1-Score": 0.994573260976813,
+            "ROC-AUC": 0.9999018211003872,
+            "FN (Falsos Negativos)": 44,
+            "FP (Falsos Positivos)": 11,
+            "Train Time (s)": 2.14
+        },
+        {
+            "Model": "MLP Neural Network",
+            "Accuracy": 1.0,
+            "Precision": 1.0,
+            "Recall (Poisonous)": 1.0,
+            "F1-Score": 1.0,
+            "ROC-AUC": 1.0,
+            "FN (Falsos Negativos)": 0,
+            "FP (Falsos Positivos)": 0,
+            "Train Time (s)": 3.73
+        }
+    ],
+    "best_model_test_metrics": {
+        "Model": "Random Forest",
+        "Accuracy": 1.0,
+        "Precision": 1.0,
+        "Recall (Poisonous)": 1.0,
+        "F1-Score": 1.0,
+        "ROC-AUC": 1.0,
+        "FN (Falsos Negativos)": 0,
+        "FP (Falsos Positivos)": 0,
+        "Train Time (s)": 1.25
+    },
+    "best_model_confusion_matrix_test": {
+        "tn": 4077,
+        "fp": 0,
+        "fn": 0,
+        "tp": 5084
+    },
+    "categorical_values": {
+        "cap-shape": [
+            "b",
+            "c",
+            "f",
+            "o",
+            "p",
+            "s",
+            "x"
+        ],
+        "cap-surface": [
+            "d",
+            "e",
+            "g",
+            "h",
+            "i",
+            "k",
+            "l",
+            "s",
+            "t",
+            "w",
+            "y"
+        ],
+        "cap-color": [
+            "b",
+            "e",
+            "g",
+            "k",
+            "l",
+            "n",
+            "o",
+            "p",
+            "r",
+            "u",
+            "w",
+            "y"
+        ],
+        "does-bruise-or-bleed": [
+            "f",
+            "t"
+        ],
+        "gill-attachment": [
+            "a",
+            "d",
+            "e",
+            "f",
+            "p",
+            "s",
+            "x"
+        ],
+        "gill-spacing": [
+            "c",
+            "d",
+            "f"
+        ],
+        "gill-color": [
+            "b",
+            "e",
+            "f",
+            "g",
+            "k",
+            "n",
+            "o",
+            "p",
+            "r",
+            "u",
+            "w",
+            "y"
+        ],
+        "stem-root": [
+            "b",
+            "c",
+            "f",
+            "r",
+            "s"
+        ],
+        "stem-surface": [
+            "f",
+            "g",
+            "h",
+            "i",
+            "k",
+            "s",
+            "t",
+            "y"
+        ],
+        "stem-color": [
+            "b",
+            "e",
+            "f",
+            "g",
+            "k",
+            "l",
+            "n",
+            "o",
+            "p",
+            "r",
+            "u",
+            "w",
+            "y"
+        ],
+        "veil-type": [
+            "u"
+        ],
+        "veil-color": [
+            "e",
+            "k",
+            "n",
+            "u",
+            "w",
+            "y"
+        ],
+        "has-ring": [
+            "f",
+            "t"
+        ],
+        "ring-type": [
+            "e",
+            "f",
+            "g",
+            "l",
+            "m",
+            "p",
+            "r",
+            "z"
+        ],
+        "spore-print-color": [
+            "g",
+            "k",
+            "n",
+            "p",
+            "r",
+            "u",
+            "w"
+        ],
+        "habitat": [
+            "d",
+            "g",
+            "h",
+            "l",
+            "m",
+            "p",
+            "u",
+            "w"
+        ],
+        "season": [
+            "a",
+            "s",
+            "u",
+            "w"
+        ]
+    },
+    "numeric_ranges": {
+        "cap-diameter": {
+            "min": 0.38,
+            "max": 62.34
+        },
+        "stem-height": {
+            "min": 0.0,
+            "max": 33.92
+        },
+        "stem-width": {
+            "min": 0.0,
+            "max": 103.91
+        }
+    }
+}
