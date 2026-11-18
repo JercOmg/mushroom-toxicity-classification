@@ -20,6 +20,8 @@ Funcionalidades:
  12. Descarga de resultados de predicción por lotes + plantilla CSV.
  13. Ficha técnica del modelo y documentación matemática embebida.
  14. Validación cruzada estratificada k-fold sin fuga de datos (pipeline por fold, test excluido).
+ 15. Detector de catálogo (src/especies.py) y dictamen en tres estados: comestible, venenoso, incierto.
+ 16. Rendimiento con especies nuevas (validar_por_especie.py, validación agrupada por especie).
 
 Ejecución:
     streamlit run app/app.py
@@ -35,13 +37,18 @@ import pandas as pd
 import seaborn as sns
 import streamlit as st
 
-ROOT = Path(__file__).resolve().parent.parent
+# Sin .resolve(): en Windows la ruta real puede superar los 260 caracteres.
+ROOT = Path(__file__).absolute().parent.parent
 MODELS_DIR = ROOT / "app" / "models"
 DATA_PATH = ROOT / "data" / "raw" / "secondary_data.csv"
 FORMULAS_PATH = ROOT / "docs" / "formulas_matematicas_modelos.md"
 
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "app"))
+import tema  # noqa: E402
+from tema import AMANITA, LIQUEN, LINEA, MUSGO, OCRE, PIZARRA, TIZA, COLORES_MODELOS  # noqa: E402
 from src.data_loader import get_train_val_test_data  # noqa: E402
+from src.especies import asignar_especie, cargar_catalogo  # noqa: E402
 from src.utils import aggregate_by_original, tree_path_contributions, what_if_scan  # noqa: E402
 from src.validation import (  # noqa: E402
     METRICAS_CV,
@@ -50,11 +57,15 @@ from src.validation import (  # noqa: E402
     validacion_cruzada_modelo,
 )
 
+LOGOS = tema.escribir_logos()
 st.set_page_config(
-    page_title="Clasificación de Toxicidad de Hongos",
-    page_icon="🍄",
+    page_title="ESPORA · Toxicidad micológica",
+    page_icon=str(LOGOS["favicon"]),
     layout="wide",
 )
+tema.configurar_matplotlib()
+st.markdown(tema.CSS, unsafe_allow_html=True)
+SIN_DATO = "— Sin dato"
 
 # ------------------------------------------------------------------ etiquetas legibles
 ETIQUETAS_VARIABLES = {
@@ -266,14 +277,21 @@ ETIQUETAS_CATEGORICAS = {
 }
 
 
-def _opciones(columna: str, valores: list) -> list:
-    """Formatea los códigos de una columna con su etiqueta legible en español."""
+def _opcion(columna: str, valor) -> str:
+    if valor is None or (isinstance(valor, float) and np.isnan(valor)):
+        return SIN_DATO
     mapa = ETIQUETAS_CATEGORICAS.get(columna, {})
-    return [f"{v} — {mapa[v]}" if v in mapa else v for v in valores]
+    return f"{valor} — {mapa[valor]}" if valor in mapa else str(valor)
 
 
-def _codigo(opcion: str) -> str:
-    return opcion.split(" — ")[0].strip()
+def _opciones(columna: str, valores: list) -> list:
+    """Formatea los códigos de una columna con su etiqueta legible en español,
+    más la opción «sin dato» (muchas especies no tienen, p. ej., raíz o velo)."""
+    return [_opcion(columna, v) for v in valores] + [SIN_DATO]
+
+
+def _codigo(opcion: str):
+    return np.nan if opcion == SIN_DATO else opcion.split(" — ")[0].strip()
 
 
 # ------------------------------------------------------------------ carga de recursos
@@ -289,6 +307,50 @@ def cargar_recursos():
 @st.cache_data(show_spinner="Cargando dataset...")
 def cargar_dataset() -> pd.DataFrame:
     return pd.read_csv(DATA_PATH, sep=";")
+
+
+@st.cache_resource(show_spinner="Construyendo el catálogo de especies...")
+def catalogo_especies(num_cols: tuple, cat_cols: tuple):
+    return cargar_catalogo(ROOT, list(num_cols), list(cat_cols))
+
+
+def dictaminar(filas: pd.DataFrame, probas: np.ndarray) -> pd.DataFrame:
+    """Dictamen en tres estados. Solo hay dictamen firme si el espécimen encaja 20/20 en el
+    perfil de una especie conocida Y su probabilidad está fuera de la franja sin datos."""
+    comp = CATALOGO.compatibilidad(filas[TODAS_LAS_COLS])
+    mejor = comp.argmax(axis=1)
+    coinciden = comp[np.arange(len(filas)), mejor]
+    en_catalogo = coinciden == len(TODAS_LAS_COLS)
+    en_franja = (probas > FRANJA[0]) & (probas < FRANJA[1])
+    estado = np.where(~en_catalogo | en_franja, "incierto", np.where(probas >= TAU, "venenoso", "comestible"))
+    return pd.DataFrame({
+        "estado": estado,
+        "especie_mas_parecida": [CATALOGO.nombres[i] for i in mejor],
+        "rasgos_compatibles": coinciden,
+        "en_catalogo": en_catalogo,
+        "en_franja": en_franja,
+    }, index=filas.index)
+
+
+def texto_dictamen(estado: str, diag: dict, proba: float) -> str:
+    especie = f"<b>{diag['nombre']}</b> <span style='color:{MUSGO}'>({diag['familia']})</span>"
+    if not diag["en_catalogo"]:
+        return (f"<b>No consumir.</b> El espécimen no encaja en ninguna de las 173 especies conocidas: la más "
+                f"parecida es {especie}, con {diag['coinciden']}/{diag['total']} rasgos compatibles. Con especies "
+                "que no vio, el modelo acierta apenas 6 de cada 10 veces.")
+    if estado == "incierto":
+        return (f"<b>No consumir.</b> Encaja con {especie}, pero P(venenoso) = {proba:.0%} cae en la franja "
+                f"{FRANJA[0]:.2f}–{FRANJA[1]:.2f}, donde no hubo ningún ejemplar de entrenamiento.")
+    if estado == "venenoso":
+        return f"<b>No consumir.</b> Perfil compatible 20/20 con {especie}."
+    return (f"Perfil compatible 20/20 con {especie}. Es una predicción estadística sobre datos simulados, "
+            "<b>no una garantía</b>: ningún hongo silvestre debe consumirse sin la confirmación de un micólogo.")
+
+
+def _fig_ancho(fig):
+    fig.patch.set_facecolor(tema.SUPERFICIE)
+    plt.tight_layout()
+    return fig
 
 
 def importancia_global(meta: dict, model, preprocessor, columnas: list) -> pd.Series:
@@ -312,25 +374,28 @@ def barra_contribuciones(contribuciones: pd.Series, titulo: str, top: int = 10):
         visibles[f"otras {len(orden) - top} variables"] = contribuciones[orden[top:]].sum()
     visibles = visibles[::-1]
     fig, ax = plt.subplots(figsize=(8, 0.42 * len(visibles) + 1.2))
-    colores = ["#c62828" if v >= 0 else "#2e7d32" for v in visibles.values]
-    barras = ax.barh(visibles.index, visibles.values * 100, color=colores)
-    ax.bar_label(barras, labels=[f"{v * 100:+.1f}" for v in visibles.values], padding=3, fontsize=9)
-    ax.axvline(0, color="#555555", lw=0.8)
+    colores = [AMANITA if v >= 0 else LIQUEN for v in visibles.values]
+    barras = ax.barh(visibles.index, visibles.values * 100, color=colores, height=0.62)
+    ax.bar_label(barras, labels=[f"{v * 100:+.1f}" for v in visibles.values], padding=4, fontsize=8.5, color=TIZA)
+    ax.axvline(0, color=MUSGO, lw=0.8)
     limite = max(abs(visibles.values).max() * 100 * 1.25, 1)
     ax.set_xlim(-limite, limite)
-    ax.set_title(titulo, fontsize=11, fontweight="bold")
-    ax.set_xlabel("Puntos porcentuales de P(venenoso)")
-    plt.tight_layout()
-    return fig
+    ax.set_title(titulo)
+    ax.set_xlabel("← hacia comestible   ·   puntos porcentuales de P(venenoso)   ·   hacia venenoso →")
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(axis="y", length=0, labelcolor=TIZA)
+    return _fig_ancho(fig)
 
 
 def fig_que_pasaria_si(escaneo: pd.DataFrame, columna: str, valor_actual, tau: float, numerica: bool):
     """Probabilidad de toxicidad para cada valor posible de una variable."""
     fig, ax = plt.subplots(figsize=(8.5, 3.6))
     nom_col = ETIQUETAS_VARIABLES.get(columna, columna)
+    ax.axhspan(FRANJA[0], FRANJA[1], color=OCRE, alpha=0.12, lw=0, label="franja sin datos")
     if numerica:
-        ax.plot(escaneo["valor"], escaneo["probabilidad"], color="#1565c0", lw=2)
-        ax.axvline(valor_actual, color="#555555", lw=1, linestyle=":", label=f"valor actual ({valor_actual:.2f})")
+        ax.plot(escaneo["valor"], escaneo["probabilidad"], color=TIZA, lw=2)
+        ax.fill_between(escaneo["valor"], escaneo["probabilidad"], color=TIZA, alpha=0.06)
+        ax.axvline(valor_actual, color=LIQUEN, lw=1.2, linestyle=":", label=f"valor actual ({valor_actual:.2f})")
         ax.set_xlabel(nom_col)
     else:
         mapa = ETIQUETAS_CATEGORICAS.get(columna, {})
@@ -338,59 +403,63 @@ def fig_que_pasaria_si(escaneo: pd.DataFrame, columna: str, valor_actual, tau: f
             "sin\ndato" if pd.isna(v) else f"{v}\n{mapa.get(v, v)}"
             for v in escaneo["valor"]
         ]
-        colores = ["#c62828" if p >= tau else "#2e7d32" for p in escaneo["probabilidad"]]
-        bordes = ["#000000" if (pd.isna(v) and pd.isna(valor_actual)) or v == valor_actual else "none"
+        colores = [AMANITA if p >= tau else LIQUEN for p in escaneo["probabilidad"]]
+        bordes = [TIZA if (pd.isna(v) and pd.isna(valor_actual)) or v == valor_actual else "none"
                   for v in escaneo["valor"]]
-        ax.bar(etiquetas, escaneo["probabilidad"], color=colores, edgecolor=bordes, linewidth=2)
+        ax.bar(etiquetas, escaneo["probabilidad"], color=colores, edgecolor=bordes, linewidth=2, width=0.66)
         ax.tick_params(axis="x", labelsize=7.5)
-        ax.set_xlabel(f"{nom_col} (borde negro = valor actual)")
-    ax.axhline(tau, color="#000000", lw=1.2, linestyle="--", label=f"umbral τ* = {tau:.2f}")
+        ax.set_xlabel(f"{nom_col} (contorno claro = valor actual)")
+    ax.axhline(tau, color=TIZA, lw=1, linestyle="--", label=f"umbral τ* = {tau:.2f}")
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("P(venenoso)")
-    ax.set_title(f"¿Qué pasaría si cambia {nom_col}?", fontsize=11, fontweight="bold")
-    ax.legend(loc="lower right", fontsize=8)
-    ax.grid(True, axis="y", alpha=0.3)
-    plt.tight_layout()
-    return fig
+    ax.set_title(f"¿Qué pasaría si cambia {nom_col}?")
+    ax.legend(loc="upper right", ncol=3)
+    ax.grid(True, axis="y")
+    return _fig_ancho(fig)
 
 
 def fig_matriz_confusion(cm: dict):
     matriz = np.array([[cm["tn"], cm["fp"]], [cm["fn"], cm["tp"]]])
-    fig, ax = plt.subplots(figsize=(5.2, 4.4))
-    sns.heatmap(matriz, annot=True, fmt="d", cmap="Blues",
-                xticklabels=["Comestible (0)", "Venenoso (1)"],
-                yticklabels=["Comestible (0)", "Venenoso (1)"], ax=ax)
-    ax.set_title("Matriz de confusión — modelo desplegado (test)", fontsize=12, fontweight="bold")
-    ax.set_xlabel("Predicción")
-    ax.set_ylabel("Real")
-    plt.tight_layout()
-    return fig
+    fig, ax = plt.subplots(figsize=(5.2, 4.6))
+    sns.heatmap(matriz, annot=True, fmt=",d", cmap=tema.mapa_secuencial(LIQUEN), cbar=False,
+                linewidths=4, linecolor=tema.SUPERFICIE, annot_kws={"fontsize": 15, "fontweight": "bold"},
+                xticklabels=["Comestible", "Venenoso"], yticklabels=["Comestible", "Venenoso"], ax=ax)
+    for texto in ax.texts:
+        texto.set_color(tema.HUMUS if int(texto.get_text().replace(",", "")) > matriz.max() / 2 else TIZA)
+    ax.set_title("Matriz de confusión · test", fontsize=14)
+    ax.set_xlabel("Predicción", fontsize=11)
+    ax.set_ylabel("Real", fontsize=11)
+    ax.tick_params(length=0, labelcolor=TIZA, labelsize=11)
+    return _fig_ancho(fig)
 
 
 def fig_comparativa(df_metricas: pd.DataFrame):
-    derretido = df_metricas.melt(
-        id_vars="Model",
-        value_vars=["Accuracy", "Precision", "Recall (Poisonous)", "F1-Score", "ROC-AUC"],
-        var_name="Métrica", value_name="Valor",
-    )
+    """Gráfico de puntos: una fila por métrica, un punto por modelo. Más legible que barras
+    agrupadas cuando casi todo está entre 0.85 y 1."""
+    metricas = ["Accuracy", "Precision", "Recall (Poisonous)", "F1-Score", "ROC-AUC"]
     fig, ax = plt.subplots(figsize=(9.5, 4.6))
-    sns.barplot(data=derretido, x="Model", y="Valor", hue="Métrica", palette="Set2", ax=ax)
-    ax.set_ylim(0.75, 1.02)
-    ax.set_title("Comparación de los 4 modelos (conjunto de test)", fontsize=12, fontweight="bold")
-    ax.set_ylabel("Puntaje (0 - 1)")
-    ax.grid(True, axis="y", alpha=0.3)
-    plt.xticks(rotation=10)
-    plt.tight_layout()
-    return fig
+    for i, metrica in enumerate(metricas):
+        valores = df_metricas[metrica].to_numpy()
+        ax.plot([valores.min(), valores.max()], [i, i], color=LINEA, lw=10, solid_capstyle="round", zorder=1)
+        n = len(df_metricas)
+        for k, (_, fila) in enumerate(df_metricas.iterrows()):
+            ax.scatter(fila[metrica], i + (k - (n - 1) / 2) * 0.13, s=70,
+                       color=COLORES_MODELOS.get(fila["Model"], PIZARRA),
+                       edgecolor=tema.SUPERFICIE, linewidth=1.2, zorder=3,
+                       label=fila["Model"] if i == 0 else None)
+    ax.set_yticks(range(len(metricas)))
+    ax.set_yticklabels(metricas, color=TIZA)
+    ax.invert_yaxis()
+    ax.set_xlim(0.84, 1.008)
+    ax.grid(True, axis="x")
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(axis="y", length=0)
+    ax.set_title("Comparación de los 4 modelos · test")
+    ax.legend(loc="lower left", ncol=4, bbox_to_anchor=(0, -0.22))
+    return _fig_ancho(fig)
 
 
 # ------------------------------------------------------------------ validación cruzada
-COLORES_MODELOS = {
-    "Logistic Regression": "#8e24aa",
-    "Random Forest": "#2e7d32",
-    "XGBoost": "#ef6c00",
-    "MLP Neural Network": "#1565c0",
-}
 SEGUNDOS_POR_FOLD = {"Logistic Regression": 1.7, "Random Forest": 1.6, "XGBoost": 1.4, "MLP Neural Network": 4.2}
 
 
@@ -426,9 +495,9 @@ def fig_esquema_folds(k: int):
         y = k - 1 - fila
         for col in range(k):
             valida = fila == col
-            ax.add_patch(plt.Rectangle((col, y), 0.94, 0.8, color="#ef6c00" if valida else "#bbdefb"))
+            ax.add_patch(plt.Rectangle((col, y), 0.94, 0.8, color=LIQUEN if valida else tema.ELEVADO))
             ax.text(col + 0.47, y + 0.4, "valida" if valida else "entrena", ha="center", va="center",
-                    fontsize=8 if k <= 5 else 6.5, color="white" if valida else "#0d47a1")
+                    fontsize=8 if k <= 5 else 6.5, color=tema.HUMUS if valida else MUSGO)
     ax.set_xlim(-0.05, k)
     ax.set_ylim(-0.1, k)
     ax.set_yticks([k - 1 - f + 0.4 for f in range(k)])
@@ -436,10 +505,8 @@ def fig_esquema_folds(k: int):
     ax.set_xticks([])
     for borde in ax.spines.values():
         borde.set_visible(False)
-    ax.set_title(f"{k}-fold estratificado sobre Train + Validación (el test queda fuera)",
-                 fontsize=10, fontweight="bold")
-    plt.tight_layout()
-    return fig
+    ax.set_title(f"{k}-fold estratificado sobre Train + Validación (el test queda fuera)", fontsize=10)
+    return _fig_ancho(fig)
 
 
 def fig_metricas_cv(resultados: pd.DataFrame):
@@ -451,35 +518,34 @@ def fig_metricas_cv(resultados: pd.DataFrame):
         for i, modelo in enumerate(modelos):
             valores = resultados.loc[resultados["Model"] == modelo, metrica].to_numpy()
             desplazamiento = np.linspace(-0.18, 0.18, len(valores))
-            ax.scatter(valores, i + desplazamiento, s=26, alpha=0.75, color=COLORES_MODELOS.get(modelo, "#555555"))
-            ax.errorbar(valores.mean(), i, xerr=valores.std(ddof=1), fmt="D", color="black", ms=5, capsize=4)
+            ax.scatter(valores, i + desplazamiento, s=26, alpha=0.8, color=COLORES_MODELOS.get(modelo, PIZARRA))
+            ax.errorbar(valores.mean(), i, xerr=valores.std(ddof=1), fmt="D", color=TIZA, ms=5, capsize=4)
         ax.set_yticks(range(len(modelos)))
-        ax.set_yticklabels(modelos, fontsize=9)
-        ax.set_title(metrica, fontsize=10, fontweight="bold")
-        ax.grid(True, axis="x", alpha=0.3)
+        ax.set_yticklabels(modelos, fontsize=9, color=TIZA)
+        ax.set_title(metrica, fontsize=10)
+        ax.grid(True, axis="x")
+        ax.tick_params(axis="y", length=0)
         minimo = resultados[metrica].min()
         ax.set_xlim(max(0.0, minimo - 0.02), 1.005)
     ejes[0, 0].invert_yaxis()
-    fig.suptitle("Métrica obtenida en cada fold (umbral 0.5)", fontsize=11, fontweight="bold")
-    plt.tight_layout()
-    return fig
+    fig.suptitle("Métrica obtenida en cada fold (umbral 0.5)", fontsize=11, fontweight="bold", color=TIZA,
+                 x=0.01, ha="left")
+    return _fig_ancho(fig)
 
 
 def fig_tau_por_fold(resultados_modelo: pd.DataFrame, tau: float, nombre_modelo: str):
     taus = resultados_modelo["τ* del fold"].to_numpy()
     etiquetas = [f"Fold {f}" for f in resultados_modelo["Fold"]]
     fig, ax = plt.subplots(figsize=(8, 3.3))
-    barras = ax.bar(etiquetas, taus, color=["#2e7d32" if t >= tau else "#c62828" for t in taus])
-    ax.bar_label(barras, labels=[f"{t:.2f}" for t in taus], padding=2, fontsize=9)
-    ax.axhline(tau, color="#000000", lw=1.2, linestyle="--", label=f"τ* desplegado = {tau:.2f}")
+    barras = ax.bar(etiquetas, taus, color=[LIQUEN if t >= tau else AMANITA for t in taus], width=0.55)
+    ax.bar_label(barras, labels=[f"{t:.2f}" for t in taus], padding=3, fontsize=9, color=TIZA)
+    ax.axhline(tau, color=TIZA, lw=1, linestyle="--", label=f"τ* desplegado = {tau:.2f}")
     ax.set_ylim(0, 1.22)
     ax.set_ylabel("Umbral más alto con FN = 0")
-    ax.set_title(f"Umbral más alto sin falsos negativos en cada fold — {nombre_modelo}", fontsize=11,
-                 fontweight="bold")
-    ax.legend(loc="upper right", fontsize=8)
-    ax.grid(True, axis="y", alpha=0.3)
-    plt.tight_layout()
-    return fig
+    ax.set_title(f"Umbral más alto sin falsos negativos en cada fold — {nombre_modelo}")
+    ax.legend(loc="upper right")
+    ax.grid(True, axis="y")
+    return _fig_ancho(fig)
 
 
 def tabla_resumen_cv(resumen: pd.DataFrame) -> pd.DataFrame:
@@ -511,7 +577,7 @@ def tabla_cv_vs_test(resumen: pd.DataFrame, metricas_test: list) -> pd.DataFrame
                 "Métrica": metrica,
                 "Validación cruzada (media ± desv.)": f"{media:.4f} ± {desv:.4f}",
                 "Test (split único)": f"{valor_test:.4f}",
-                "¿Test dentro de media ± 2·desv.?": "✅ sí" if abs(valor_test - media) <= 2 * desv + 1e-3 else "⚠️ no",
+                "¿Test dentro de media ± 2·desv.?": "sí" if abs(valor_test - media) <= 2 * desv + 1e-3 else "no",
             })
     return pd.DataFrame(filas)
 
@@ -541,49 +607,89 @@ if not DATA_PATH.exists():
 DF = cargar_dataset()
 FEATURE_NAMES = list(PREPROCESSOR.get_feature_names_out())
 MODELO_DE_ARBOLES = hasattr(MODEL, "estimators_") and hasattr(MODEL.estimators_[0], "tree_")
+CATALOGO = catalogo_especies(tuple(NUM_COLS), tuple(CAT_COLS))
+ESPECIE_FILA = asignar_especie(len(DF))
+_banda = CALIBRACION.get("cv_out_of_fold_band") or {}
+FRANJA = (float(_banda.get("max_proba_edible", TAU)), float(_banda.get("min_proba_poisonous", TAU)))
+VAL_ESPECIE = META.get("species_validation") or {}
 
 # ------------------------------------------------------------------ barra lateral
-st.sidebar.title("🍄 Clasificador Micológico")
-PAGINA = st.sidebar.radio(
-    "Navegación",
-    [
-        "🎯 Predicción individual",
-        "📦 Predicción por lotes",
-        "📊 Rendimiento del modelo",
-        "🔁 Validación cruzada",
-        "🔍 Explicabilidad (XAI)",
-        "🍄 Exploración del dataset",
-        "📖 Ficha técnica y fórmulas",
-    ],
-)
-st.sidebar.divider()
-st.sidebar.markdown(
-    f"""
-**Modelo desplegado:** {META["model_name"]} ({META.get("model_class", "—")})
+PAGINAS = {
+    "01  Diagnóstico": "Diagnóstico de un espécimen",
+    "02  Lotes": "Diagnóstico por lotes",
+    "03  Rendimiento": "Rendimiento del modelo",
+    "04  Validación": "Validación cruzada",
+    "05  Explicabilidad": "¿Por qué decidió esto?",
+    "06  Datos": "Exploración del dataset",
+    "07  Ficha técnica": "Ficha técnica y fórmulas",
+}
+with st.sidebar:
+    st.markdown(tema.marca_lateral(), unsafe_allow_html=True)
+    PAGINA = st.radio("Navegación", list(PAGINAS), label_visibility="collapsed")
+    st.markdown(
+        f"""<div class="esp-ficha">
+MODELO <span>{META["model_name"]}</span><br>
+UMBRAL τ* <span>{TAU:.2f}</span><br>
+FRANJA INCIERTA <span>{FRANJA[0]:.2f}–{FRANJA[1]:.2f}</span><br>
+ESPECIES <span>{len(CATALOGO.nombres)}</span><br>
+ENTRENADO <span>{str(META.get("trained_at", "—"))[:10]}</span></div>""",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Proyecto académico sobre datos simulados. No usar para decidir si un hongo silvestre se puede comer."
+    )
 
-**Umbral de riesgo cero:** τ\\* = {TAU:.2f} ({ORIGEN_TAU})
+NUMERO, NOMBRE = PAGINA.split("  ")
+KICKER = f"ESPORA <b>/</b> {NOMBRE.upper()} <b>·</b> {META['model_name'].upper()} <b>·</b> <span style='text-transform:none'>τ*</span> {TAU:.2f}"
+BAJADAS = {
+    "01": "Describe el hongo con sus 20 rasgos. El sistema solo da un dictamen si encaja en una de las 173 "
+          "especies conocidas; si no, responde «incierto».",
+    "02": "Sube un CSV con varios especímenes y descarga el dictamen de cada uno.",
+    "03": "Cómo rinde el modelo con especies que ya conoce y con especies que nunca vio.",
+    "04": "Validación cruzada estratificada k-fold, sin fuga de datos entre entrenamiento y validación.",
+    "05": "Qué rasgos empujaron la probabilidad hacia venenoso o comestible, y qué pasaría si cambian.",
+    "06": "61.069 ejemplares simulados de 173 especies — Secondary Mushroom Dataset (Wagner et al., 2021).",
+    "07": "Calibración del umbral, metadatos del modelo y documentación matemática.",
+}
+st.markdown(tema.cabecera(NUMERO, PAGINAS[PAGINA], BAJADAS[NUMERO], KICKER), unsafe_allow_html=True)
 
-**Precisión en test:** {META["best_model_test_metrics"]["Precision"]:.1%}
 
-**Entrenado:** {META.get("trained_at", "—")}
-"""
-)
-st.sidebar.caption(f"Metodología de riesgo cero: {REGLA_TAU}")
+def _rellenar_desde_especie():
+    """Carga en el formulario un ejemplar real de la especie elegida."""
+    nombre = st.session_state.get("plantilla_especie")
+    if not nombre or nombre not in CATALOGO.nombres:
+        return
+    i = CATALOGO.nombres.index(nombre)
+    ejemplar = DF.iloc[i * 353 + int(st.session_state.get("plantilla_semilla", 0)) % 353]
+    for col in NUM_COLS:
+        rango = META["numeric_ranges"][col]
+        st.session_state[f"in_{col}"] = float(np.clip(ejemplar[col], rango["min"], rango["max"]))
+    for col in CAT_COLS:
+        st.session_state[f"in_{col}"] = _opcion(col, ejemplar[col])
 
-st.title("🍄 Sistema Inteligente de Clasificación Micológica")
-st.markdown(
-    "Clasificación de hongos como **Comestible (e)** o **Venenoso (p)** a partir de "
-    "características morfológicas — *Secondary Mushroom Dataset*, 61.069 registros."
-)
-st.divider()
 
-# ================================================================== 1. PREDICCIÓN INDIVIDUAL
-if PAGINA == "🎯 Predicción individual":
-    st.subheader("Predicción individual en tiempo real")
-    st.caption("Completa las 20 características morfológicas del espécimen y ejecuta la inferencia.")
+# ================================================================== 1. DIAGNÓSTICO
+if NUMERO == "01":
+    if "in_cap-diameter" not in st.session_state:
+        st.session_state["plantilla_especie"] = CATALOGO.nombres[0]
+        _rellenar_desde_especie()
+
+    c_pl, c_btn = st.columns([3, 1], vertical_alignment="bottom")
+    c_pl.selectbox(
+        "Partir de un ejemplar del catálogo",
+        CATALOGO.nombres,
+        key="plantilla_especie",
+        format_func=lambda n: f"{n} · {CATALOGO.familias[CATALOGO.nombres.index(n)]}",
+        on_change=_rellenar_desde_especie,
+        help="Rellena el formulario con un ejemplar real de esa especie. Después puedes modificar cualquier rasgo.",
+    )
+    if c_btn.button("Otro ejemplar", width="stretch"):
+        st.session_state["plantilla_semilla"] = int(np.random.default_rng().integers(0, 353))
+        _rellenar_desde_especie()
+        st.rerun()
 
     with st.form("formulario_hongo"):
-        st.markdown("**Variables métricas (numéricas)**")
+        st.markdown(tema.seccion("Medidas"), unsafe_allow_html=True)
         c_num = st.columns(3)
         valores_num = {}
         for col, contenedor in zip(NUM_COLS, c_num):
@@ -592,11 +698,11 @@ if PAGINA == "🎯 Predicción individual":
                 ETIQUETAS_NUMERICAS[col],
                 min_value=float(rango["min"]),
                 max_value=float(rango["max"]),
-                value=float((rango["min"] + rango["max"]) / 2),
                 step=0.1,
+                key=f"in_{col}",
             )
 
-        st.markdown("**Variables nominales (categóricas)**")
+        st.markdown(tema.seccion("Rasgos"), unsafe_allow_html=True)
         valores_cat = {}
         for i in range(0, len(CAT_COLS), 3):
             fila = st.columns(3)
@@ -604,41 +710,43 @@ if PAGINA == "🎯 Predicción individual":
                 valores_cat[col] = contenedor.selectbox(
                     ETIQUETAS_VARIABLES.get(col, col),
                     _opciones(col, META["categorical_values"][col]),
-                    index=0,
+                    key=f"in_{col}",
                 )
-        ejecutar = st.form_submit_button("🔎 Clasificar espécimen", width="stretch")
+        ejecutar = st.form_submit_button("Analizar espécimen", width="stretch")
 
     if ejecutar:
         fila = {**valores_num, **{c: _codigo(v) for c, v in valores_cat.items()}}
+        st.session_state["ultima_prediccion"] = {"fila": fila}
+
+    if "ultima_prediccion" in st.session_state:
+        fila = st.session_state["ultima_prediccion"]["fila"]
         entrada = pd.DataFrame([fila])[TODAS_LAS_COLS]
         proba = float(PIPELINE.predict_proba(entrada)[0, 1])
-        st.session_state["ultima_prediccion"] = {"fila": fila, "proba": proba}
+        st.session_state["ultima_prediccion"]["proba"] = proba
+        estado = dictaminar(entrada, np.array([proba]))["estado"].iloc[0]
+        diag = CATALOGO.diagnostico(fila)
 
-        venenoso = proba >= TAU
-        cont1, cont2, cont3 = st.columns(3)
-        cont1.metric(
-            "Dictamen del sistema",
-            "⚠️ VENENOSO" if venenoso else "🍽️ COMESTIBLE",
-        )
-        cont2.metric("P(venenoso)", f"{proba:.2%}")
-        cont3.metric("Umbral τ*", f"{TAU:.2f}")
-        st.progress(proba, text="Probabilidad de toxicidad estimada por el modelo")
+        st.markdown(tema.veredicto(estado, texto_dictamen(estado, diag, proba), proba), unsafe_allow_html=True)
+        st.markdown(tema.espectro(proba, TAU, FRANJA), unsafe_allow_html=True)
 
-        st.markdown("**Efecto del umbral de decisión (metodología de riesgo cero):**")
-        tau_usuario = st.slider(
-            "Umbral τ", min_value=0.01, max_value=0.95, value=TAU, step=0.01,
-            help=f"τ* = {TAU:.2f}. {REGLA_TAU}",
-        )
-        if tau_usuario != TAU:
-            dictamen_alt = proba >= tau_usuario
-            st.info(
-                f"Con τ = {tau_usuario:.2f} el dictamen sería: "
-                f"**{'⚠️ VENENOSO' if dictamen_alt else '🍽️ COMESTIBLE'}**."
+        st.markdown(tema.seccion(
+            f"Especie más parecida · {diag['nombre']} · {diag['coinciden']}/{diag['total']} rasgos compatibles"
+        ), unsafe_allow_html=True)
+        st.markdown(tema.rasgos({c: ETIQUETAS_VARIABLES.get(c, c) for c in TODAS_LAS_COLS},
+                                diag["variables_fuera"]), unsafe_allow_html=True)
+        if diag["variables_fuera"]:
+            st.caption("Los rasgos con contorno ocre no encajan en el perfil observado de esa especie.")
+
+        with st.expander("Explorar otro umbral"):
+            tau_usuario = st.slider(
+                "Umbral τ", min_value=0.01, max_value=0.95, value=TAU, step=0.01,
+                help=f"τ* = {TAU:.2f}. {REGLA_TAU}",
             )
-        if venenoso:
-            st.error("⛔ El sistema recomienda NO consumir este espécimen.")
-        else:
-            st.success("✅ Espécimen clasificado como comestible bajo la garantía de riesgo cero.")
+            st.markdown(
+                f"Con τ = {tau_usuario:.2f}, el modelo marcaría este espécimen como "
+                f"**{'venenoso' if proba >= tau_usuario else 'comestible'}**. El detector de catálogo y la "
+                "franja incierta se aplican igual con cualquier umbral."
+            )
 
         with st.expander("Ver características ingresadas"):
             datos_mostrar = []
@@ -648,6 +756,8 @@ if PAGINA == "🎯 Predicción individual":
                 if col in NUM_COLS:
                     unidad = "cm" if "diameter" in col or "height" in col else "mm"
                     val_str = f"{float(val):.2f} {unidad}"
+                elif pd.isna(val):
+                    val_str = "sin dato"
                 else:
                     desc = ETIQUETAS_CATEGORICAS.get(col, {}).get(val, val)
                     if desc != val:
@@ -659,14 +769,13 @@ if PAGINA == "🎯 Predicción individual":
             df_caracteristicas = pd.DataFrame(datos_mostrar)
             st.dataframe(df_caracteristicas, width="stretch", hide_index=True)
 
-# ================================================================== 2. PREDICCIÓN POR LOTES
-if PAGINA == "📦 Predicción por lotes":
-    st.subheader("Predicción por lotes desde CSV")
-    st.caption("Sube un CSV con las 20 características (la columna `class` es opcional y se ignora si viene).")
+# ================================================================== 2. LOTES
+if NUMERO == "02":
+    st.caption("El CSV debe tener las 20 características (la columna `class` es opcional y se ignora).")
 
-    plantilla = DF[TODAS_LAS_COLS].head(5).copy()
+    plantilla = DF[TODAS_LAS_COLS].iloc[::12000].copy()
     st.download_button(
-        "⬇️ Descargar plantilla de ejemplo (5 registros)",
+        f"Descargar plantilla de ejemplo ({len(plantilla)} registros)",
         plantilla.to_csv(index=False).encode("utf-8"),
         file_name="plantilla_hongos.csv",
         mime="text/csv",
@@ -688,54 +797,88 @@ if PAGINA == "📦 Predicción por lotes":
                 probabilidades = PIPELINE.predict_proba(lote[TODAS_LAS_COLS])[:, 1]
             resultado = lote.copy()
             resultado["probabilidad_venenoso"] = probabilidades.round(4)
-            resultado["dictamen"] = np.where(probabilidades >= TAU, "Venenoso (p)", "Comestible (e)")
+            dictamen = dictaminar(lote, probabilidades)
+            resultado["dictamen"] = dictamen["estado"].map(tema.TITULOS_ESTADO)
+            resultado["especie_mas_parecida"] = dictamen["especie_mas_parecida"]
+            resultado["rasgos_compatibles"] = dictamen["rasgos_compatibles"].astype(str) + f"/{len(TODAS_LAS_COLS)}"
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Registros procesados", len(resultado))
-            c2.metric("Clasificados venenosos", int((resultado["dictamen"] == "Venenoso (p)").sum()))
-            c3.metric("Clasificados comestibles", int((resultado["dictamen"] == "Comestible (e)").sum()))
+            conteo = dictamen["estado"].value_counts()
+            st.markdown(tema.cifras([
+                ("Procesados", f"{len(resultado):,}", "registros del archivo", ""),
+                ("Venenosos", f"{conteo.get('venenoso', 0):,}", "no consumir", "mala"),
+                ("Comestibles", f"{conteo.get('comestible', 0):,}", "perfil 20/20 de una especie comestible", "buena"),
+                ("Inciertos", f"{conteo.get('incierto', 0):,}", "fuera del catálogo o en la franja", ""),
+            ]), unsafe_allow_html=True)
 
             st.dataframe(resultado.head(100), width="stretch")
             if len(resultado) > 100:
                 st.caption(f"Mostrando 100 de {len(resultado)} registros.")
 
             st.download_button(
-                "⬇️ Descargar resultados completos (CSV)",
+                "Descargar resultados completos (CSV)",
                 resultado.to_csv(index=False).encode("utf-8"),
                 file_name="resultados_prediccion.csv",
                 mime="text/csv",
             )
 
 # ================================================================== 3. RENDIMIENTO
-elif PAGINA == "📊 Rendimiento del modelo":
-    st.subheader("Dashboard de rendimiento del modelo desplegado")
+elif NUMERO == "03":
     mejor = META["best_model_test_metrics"]
-    if mejor["Precision"] > 0.95:
-        st.success(
-            f"✅ **Criterio de la rúbrica cumplido:** precisión del modelo desplegado en el conjunto de "
-            f"prueba = **{mejor['Precision']:.1%}** (> 95 %) sobre {META['best_model_confusion_matrix_test']['tn'] + META['best_model_confusion_matrix_test']['tp']:,} especímenes nunca vistos."
-        )
+    cm_test = META["best_model_confusion_matrix_test"]
+    n_test = sum(cm_test.values())
+    nuevas = VAL_ESPECIE.get("unseen_species", {})
+    detector = VAL_ESPECIE.get("catalog_detector", {})
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Accuracy", f"{mejor['Accuracy']:.2%}")
-    m2.metric("Precision", f"{mejor['Precision']:.2%}")
-    m3.metric("Recall (venenoso)", f"{mejor['Recall (Poisonous)']:.2%}")
-    m4.metric("F1-Score", f"{mejor['F1-Score']:.4f}")
-    m5.metric("ROC-AUC", f"{mejor['ROC-AUC']:.4f}")
+    st.markdown(tema.seccion("Dos preguntas distintas"), unsafe_allow_html=True)
+    st.markdown(tema.cifras([
+        ("Especies conocidas · test", f"{mejor['Precision']:.1%}",
+         f"precisión sobre {n_test:,} ejemplares de especies vistas al entrenar", "buena"),
+        ("Especies nuevas · accuracy", f"{nuevas.get('accuracy', float('nan')):.1%}" if nuevas else "—",
+         "validación cruzada agrupada por especie", "mala"),
+        ("Especies nuevas · ROC-AUC", f"{nuevas.get('roc_auc', float('nan')):.2f}" if nuevas else "—",
+         "0,50 sería azar", "mala"),
+        ("Venenosas no detectadas", f"{nuevas.get('species_poisonous_missed', 0)}/"
+         f"{nuevas.get('species_poisonous_total', 0)}" if nuevas else "—",
+         f"especies nuevas con τ* = {TAU:.2f}", "mala"),
+    ]), unsafe_allow_html=True)
+    if nuevas:
+        st.markdown(tema.nota(
+            "<b>Por qué tanta diferencia.</b> El dataset tiene 353 ejemplares simulados por especie, y la "
+            "partición aleatoria pone ejemplares de la misma especie en entrenamiento y en prueba. El 100 % "
+            "mide si el modelo <b>reconoce especies que ya vio</b>. Cuando cada especie queda entera de un "
+            "solo lado (validación cruzada agrupada por especie, k = 5), el rendimiento cae cerca del azar. "
+            f"<br><br><b>Cómo lo maneja la app.</b> Solo da un dictamen si el espécimen encaja 20/20 en una "
+            f"especie conocida. Con especies desconocidas, solo el {detector.get('unseen_rows_passing', 0):.2%} "
+            f"de los ejemplares pasa ese filtro, y entre ellos hubo "
+            f"{detector.get('errors_on_passing_rows', {}).get('fn', '—')} venenosos tomados por comestibles. "
+            "Todo lo demás se reporta como <b>incierto</b>."
+        ), unsafe_allow_html=True)
+    else:
+        st.warning("Falta la validación por especie: ejecuta `python validar_por_especie.py`.")
 
+    st.markdown(tema.seccion("Especies conocidas · conjunto de prueba"), unsafe_allow_html=True)
+    c_matriz, c_cifras = st.columns([1, 1], gap="medium")
+    with c_matriz:
+        st.pyplot(fig_matriz_confusion(cm_test))
+    with c_cifras:
+        st.markdown(tema.cifras([
+            ("Accuracy", f"{mejor['Accuracy']:.1%}", "aciertos sobre el total", ""),
+            ("Precision", f"{mejor['Precision']:.1%}", "de los marcados venenosos, lo eran", ""),
+            ("Recall venenoso", f"{mejor['Recall (Poisonous)']:.1%}", "venenosos detectados", ""),
+            ("F1-Score", f"{mejor['F1-Score']:.3f}", "balance precision / recall", ""),
+            ("ROC-AUC", f"{mejor['ROC-AUC']:.3f}", "capacidad de ordenar por riesgo", ""),
+            ("Ejemplares", f"{n_test:,}", "15 % del dataset, partición aleatoria", ""),
+        ], columnas=2), unsafe_allow_html=True)
     st.caption(
         f"Selección por evidencia — criterio: {META['selection_criteria']}. "
         f"Umbral de riesgo cero calibrado: τ* = {TAU:.2f}."
     )
 
     df_test = pd.DataFrame(META["test_metrics"])
-    c_izq, c_der = st.columns([1.4, 1])
-    with c_izq:
-        st.pyplot(fig_comparativa(df_test))
-    with c_der:
-        st.pyplot(fig_matriz_confusion(META["best_model_confusion_matrix_test"]))
+    st.markdown(tema.seccion("Los 4 modelos entrenados"), unsafe_allow_html=True)
+    st.pyplot(fig_comparativa(df_test))
 
-    st.markdown("**Tabla comparativa en test:**")
+    st.markdown(tema.seccion("Tabla comparativa · test"), unsafe_allow_html=True)
     st.dataframe(
         df_test.style.format(
             {c: "{:.4f}" for c in ["Accuracy", "Precision", "Recall (Poisonous)", "F1-Score", "ROC-AUC"]}
@@ -747,8 +890,7 @@ elif PAGINA == "📊 Rendimiento del modelo":
         st.dataframe(pd.DataFrame(META["validation_metrics"]), width="stretch", hide_index=True)
 
 # ================================================================== 3b. VALIDACIÓN CRUZADA
-elif PAGINA == "🔁 Validación cruzada":
-    st.subheader("Validación cruzada estratificada (k-fold) sin fuga de datos")
+elif NUMERO == "04":
     st.markdown(
         "Un solo split train/test puede salir «con suerte». La validación cruzada divide el conjunto de "
         "desarrollo en **k partes**, entrena **k veces** dejando fuera una parte distinta cada vez y "
@@ -766,7 +908,7 @@ elif PAGINA == "🔁 Validación cruzada":
         k_elegido = c_k.select_slider("Número de folds (k)", options=[3, 5, 10], value=5)
         estimado = sum(SEGUNDOS_POR_FOLD.get(m, 2) for m in modelos_elegidos) * k_elegido
         st.caption(f"Tiempo estimado la primera vez: ~{estimado:.0f} s. Después queda en caché y es instantáneo.")
-        ejecutar_cv = st.form_submit_button("▶️ Ejecutar validación cruzada", width="stretch")
+        ejecutar_cv = st.form_submit_button("Ejecutar validación cruzada", width="stretch")
 
     if ejecutar_cv:
         if not modelos_elegidos:
@@ -791,7 +933,7 @@ elif PAGINA == "🔁 Validación cruzada":
         resultados_cv = pd.concat(partes, ignore_index=True)
         resumen_cv = resumen_validacion_cruzada(resultados_cv)
 
-        st.markdown(f"#### Resultados: {k_cv}-fold sobre {controles['n_desarrollo']:,} especímenes de desarrollo")
+        st.markdown(tema.seccion(f"Resultados: {k_cv}-fold sobre {controles['n_desarrollo']:,} especímenes de desarrollo"), unsafe_allow_html=True)
         st.dataframe(tabla_resumen_cv(resumen_cv), width="stretch", hide_index=True)
         st.caption(
             "Métricas con el umbral 0.5. Las columnas con τ aplican el umbral de riesgo cero "
@@ -809,12 +951,12 @@ elif PAGINA == "🔁 Validación cruzada":
             tau_robusto = float(res_desp["τ* del fold"].min())
             if fn_tau == 0:
                 st.success(
-                    f"✅ **Riesgo cero estable:** con τ* = {TAU:.2f}, el {desplegado} no dejó pasar ningún "
-                    f"hongo venenoso en ninguno de los {k_cv} folds."
+                    f"Con τ* = {TAU:.2f}, el {desplegado} no dejó pasar ningún hongo venenoso en ninguno de "
+                    f"los {k_cv} folds (con especies que ya conocía; ver la nota sobre especies nuevas abajo)."
                 )
             else:
                 st.warning(
-                    f"⚠️ Con τ* = {TAU:.2f}, el {desplegado} clasificó como comestibles **{fn_tau}** "
+                    f"Con τ* = {TAU:.2f}, el {desplegado} clasificó como comestibles **{fn_tau}** "
                     f"hongo(s) venenoso(s) en **{folds_con_fn} de {k_cv}** folds. El τ* desplegado se calibró "
                     f"con {ORIGEN_TAU}; con esta configuración, el umbral más alto con FN = 0 en todos los "
                     f"folds es **{tau_robusto:.2f}**. Para recalibrarlo, ejecuta `python recalibrar_umbral_cv.py`."
@@ -825,10 +967,10 @@ elif PAGINA == "🔁 Validación cruzada":
                 "queda por debajo, así que no produce falsos negativos. Rojo: sí los produce."
             )
 
-        st.markdown("#### Variabilidad entre folds")
+        st.markdown(tema.seccion("Variabilidad entre folds"), unsafe_allow_html=True)
         st.pyplot(fig_metricas_cv(resultados_cv))
 
-        st.markdown("#### ¿El resultado del test fue suerte?")
+        st.markdown(tema.seccion("¿El resultado del test fue suerte?"), unsafe_allow_html=True)
         st.caption(
             "Compara la métrica del único split de test (notebook 03) con la media ± desviación de la "
             "validación cruzada. Si el test cae dentro de la banda, el resultado reportado es representativo."
@@ -845,24 +987,24 @@ elif PAGINA == "🔁 Validación cruzada":
                 hide_index=True,
             )
             st.download_button(
-                "⬇️ Descargar resultados por fold (CSV)",
+                "Descargar resultados por fold (CSV)",
                 resultados_cv.to_csv(index=False).encode("utf-8"),
                 file_name=f"validacion_cruzada_{k_cv}fold.csv",
                 mime="text/csv",
             )
 
         # ---------------------------------------------------- controles de fuga de datos
-        st.markdown("#### Controles de fuga de datos (data leakage)")
+        st.markdown(tema.seccion("Controles de fuga de datos (data leakage)"), unsafe_allow_html=True)
         prop = resultados_cv["% venenosos (validación)"]
         repetidas = controles["test_repetidas_en_desarrollo"]
         st.markdown(
             f"""
 | Control | Resultado |
 |---|---|
-| El test no participa en la validación cruzada | ✅ {controles['n_desarrollo']:,} filas de desarrollo y {controles['n_test']:,} de test; índices compartidos: **{controles['indices_compartidos']}** |
-| Preprocesamiento ajustado dentro de cada fold | ✅ Se crea un `Pipeline` nuevo por fold: el imputador, el escalador y el One-Hot solo ven las filas de entrenamiento del fold |
-| Folds estratificados | ✅ % de venenosos en validación entre **{prop.min():.2%}** y **{prop.max():.2%}** |
-| Filas del test idénticas a filas de desarrollo | {'✅ ninguna' if repetidas == 0 else f'⚠️ **{repetidas}** ({repetidas / controles["n_test"]:.2%} del test) — el dataset tiene {controles["duplicados_dataset"]} registros duplicados'} |
+| El test no participa en la validación cruzada | Sí. {controles['n_desarrollo']:,} filas de desarrollo y {controles['n_test']:,} de test; índices compartidos: **{controles['indices_compartidos']}** |
+| Preprocesamiento ajustado dentro de cada fold | Sí. Se crea un `Pipeline` nuevo por fold: el imputador, el escalador y el One-Hot solo ven las filas de entrenamiento del fold |
+| Folds estratificados | Sí. % de venenosos en validación entre **{prop.min():.2%}** y **{prop.max():.2%}** |
+| Filas del test idénticas a filas de desarrollo | {'Ninguna' if repetidas == 0 else f'**{repetidas}** ({repetidas / controles["n_test"]:.2%} del test) — el dataset tiene {controles["duplicados_dataset"]} registros duplicados'} |
 """
         )
         st.code(
@@ -872,35 +1014,42 @@ elif PAGINA == "🔁 Validación cruzada":
             "    proba = pipeline.predict_proba(X_dev.iloc[idx_val])[:, 1]   # se evalúa con datos que no vio",
             language="python",
         )
-        st.info(
-            "**Limitación del dataset:** el *Secondary Mushroom Dataset* fue simulado a partir de 173 especies, "
-            "así que hay muchos especímenes muy parecidos entre sí. La validación cruzada aleatoria mide qué tan "
-            "bien el modelo reconoce especies que ya vio, no especies nuevas; por eso las métricas cercanas al "
-            "100 % no implican lo mismo en hongos de especies fuera del dataset."
-        )
+        nuevas = VAL_ESPECIE.get("unseen_species", {})
+        st.markdown(tema.nota(
+            "<b>Limitación medida, no supuesta.</b> Esta validación cruzada reparte al azar ejemplares de la misma "
+            "especie entre entrenamiento y validación, así que mide si el modelo reconoce especies que ya vio. "
+            + (f"Agrupando por especie (ninguna especie a ambos lados), el {META['model_name']} baja a "
+               f"<b>{nuevas['accuracy']:.1%}</b> de accuracy y ROC-AUC <b>{nuevas['roc_auc']:.2f}</b>. Detalle en "
+               "«03 Rendimiento»." if nuevas else "Ejecuta `python validar_por_especie.py` para medirlo.")
+        ), unsafe_allow_html=True)
 
 # ================================================================== 4. EXPLICABILIDAD
-elif PAGINA == "🔍 Explicabilidad (XAI)":
-    st.subheader("Explicabilidad: ¿por qué el modelo decidió esto?")
+elif NUMERO == "05":
     ultima = st.session_state.get("ultima_prediccion")
     if ultima is None:
         espécimen = DF[TODAS_LAS_COLS].iloc[0].to_dict()
-        st.caption("No hay predicción reciente: se explica el espécimen de ejemplo (primera fila del dataset).")
+        st.caption("No hay un análisis reciente: se explica el primer ejemplar del dataset.")
     else:
         espécimen = ultima["fila"]
-        st.caption("Explicando tu última predicción de la página «Predicción individual».")
+        st.caption("Explicando tu último análisis de «01 Diagnóstico».")
 
     entrada = pd.DataFrame([espécimen])[TODAS_LAS_COLS]
     proba = float(PIPELINE.predict_proba(entrada)[0, 1])
     venenoso = proba >= TAU
+    estado = dictaminar(entrada, np.array([proba]))["estado"].iloc[0]
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Dictamen", "⚠️ VENENOSO" if venenoso else "🍽️ COMESTIBLE")
-    c2.metric("P(venenoso)", f"{proba:.2%}")
-    c3.metric("Umbral τ*", f"{TAU:.2f}")
+    st.markdown(tema.cifras([
+        ("Dictamen", f'<span style="color:{tema.COLOR_ESTADO[estado]}">{tema.TITULOS_ESTADO[estado]}</span>',
+         "con el detector de catálogo", ""),
+        ("P(venenoso)", f"{proba:.1%}", "probabilidad del modelo", ""),
+        ("Umbral τ*", f"{TAU:.2f}", f"franja incierta {FRANJA[0]:.2f}–{FRANJA[1]:.2f}", ""),
+    ], columnas=3), unsafe_allow_html=True)
+    if estado == "incierto":
+        st.caption("El dictamen es «incierto»: la explicación muestra cómo razona el modelo, pero su "
+                   "probabilidad no es fiable para este espécimen.")
 
     # ---------------------------------------------------------- desglose local
-    st.markdown("#### 1. Desglose de la probabilidad por variable")
+    st.markdown(tema.seccion("1. Desglose de la probabilidad por variable"), unsafe_allow_html=True)
     if MODELO_DE_ARBOLES:
         base, contrib = tree_path_contributions(MODEL, PREPROCESSOR.transform(entrada))
         por_variable = aggregate_by_original(contrib, FEATURE_NAMES, TODAS_LAS_COLS).iloc[0]
@@ -923,7 +1072,7 @@ elif PAGINA == "🔍 Explicabilidad (XAI)":
         )
 
     # ---------------------------------------------------------- simulador qué pasaría si
-    st.markdown("#### 2. ¿Qué pasaría si…?")
+    st.markdown(tema.seccion("2. ¿Qué pasaría si…?"), unsafe_allow_html=True)
     st.caption("Cambia una variable del espécimen a todos sus valores posibles y observa la probabilidad.")
     columna = st.selectbox(
         "Variable a simular",
@@ -949,7 +1098,7 @@ elif PAGINA == "🔍 Explicabilidad (XAI)":
         )
 
     # ---------------------------------------------------------- importancia global
-    st.markdown("#### 3. Importancia global del modelo")
+    st.markdown(tema.seccion("3. Importancia global del modelo"), unsafe_allow_html=True)
     importancia = importancia_global(META, MODEL, PREPROCESSOR, TODAS_LAS_COLS)
     if importancia is None:
         st.warning("Este modelo no expone importancias globales.")
@@ -957,64 +1106,92 @@ elif PAGINA == "🔍 Explicabilidad (XAI)":
         top = importancia.head(12)[::-1].copy()
         top.index = [ETIQUETAS_VARIABLES.get(c, c) for c in top.index]
         fig, ax = plt.subplots(figsize=(8, 4.6))
-        ax.barh(top.index, top.values * 100, color="#1565c0")
-        ax.set_title("Variables que más pesan en las decisiones del modelo", fontsize=11, fontweight="bold")
+        ax.hlines(top.index, 0, top.values * 100, color=LINEA, lw=2)
+        ax.scatter(top.values * 100, top.index, s=70, color=LIQUEN, zorder=3)
+        ax.set_title("Variables que más pesan en las decisiones del modelo")
         ax.set_xlabel("Aporte medio absoluto (puntos porcentuales de P(venenoso))")
-        plt.tight_layout()
-        st.pyplot(fig)
+        ax.spines["left"].set_visible(False)
+        ax.tick_params(axis="y", length=0, labelcolor=TIZA)
+        ax.set_xlim(0, None)
+        st.pyplot(_fig_ancho(fig))
         st.caption(META.get("global_importance_method", "Importancias nativas del modelo (feature_importances_)."))
 
 # ================================================================== 5. EXPLORACIÓN DEL DATASET
-elif PAGINA == "🍄 Exploración del dataset":
-    st.subheader("Exploración del dataset (INFOVIZ)")
-    st.caption(f"{DF.shape[0]:,} registros × {DF.shape[1]} columnas — Secondary Mushroom Dataset.")
+elif NUMERO == "06":
+    conteo = DF["class"].value_counts()
+    especies_clase = pd.Series(CATALOGO.clases).value_counts()
+    st.markdown(tema.cifras([
+        ("Ejemplares", f"{len(DF):,}", f"{DF.shape[1]} columnas", ""),
+        ("Especies", f"{len(CATALOGO.nombres)}", "353 ejemplares simulados por especie", ""),
+        ("Venenosos", f"{conteo.get('p', 0) / len(DF):.1%}",
+         f"{especies_clase.get('p', 0)} especies (incluye comestibilidad desconocida)", "mala"),
+        ("Comestibles", f"{conteo.get('e', 0) / len(DF):.1%}", f"{especies_clase.get('e', 0)} especies", "buena"),
+    ]), unsafe_allow_html=True)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        fig, ax = plt.subplots(figsize=(4.6, 3.6))
-        conteo = DF["class"].value_counts()
-        ax.pie(conteo.values, labels=["Venenoso (p)" if k == "p" else "Comestible (e)" for k in conteo.index],
-               autopct="%1.1f%%", colors=["#c62828", "#2e7d32"], startangle=90)
-        ax.set_title("Balance de clases", fontsize=12, fontweight="bold")
-        plt.tight_layout()
-        st.pyplot(fig)
-    with c2:
-        fig, ejes = plt.subplots(1, 3, figsize=(10.5, 3.6))
-        for ax, col in zip(ejes, NUM_COLS):
-            sns.histplot(DF[col], bins=40, ax=ax, color="#1565c0")
-            ax.set_title(ETIQUETAS_VARIABLES.get(col, col), fontsize=10)
-            ax.set_xlabel("")
-        plt.tight_layout()
-        st.pyplot(fig)
+    st.markdown(tema.seccion("Medidas por clase"), unsafe_allow_html=True)
+    fig, ejes = plt.subplots(1, 3, figsize=(12, 3.4))
+    for ax, col in zip(ejes, NUM_COLS):
+        limite = DF[col].quantile(0.99)
+        for clase, color, nombre in [("e", LIQUEN, "comestible"), ("p", AMANITA, "venenoso")]:
+            datos = DF.loc[(DF["class"] == clase) & (DF[col] <= limite), col]
+            ax.hist(datos, bins=45, color=color, alpha=0.10, histtype="stepfilled")
+            ax.hist(datos, bins=45, color=color, lw=1.6, label=nombre, histtype="step")
+        ax.set_title(ETIQUETAS_VARIABLES.get(col, col), fontsize=10)
+        ax.set_yticks([])
+        ax.spines["left"].set_visible(False)
+    ejes[0].legend(loc="upper right")
+    st.pyplot(_fig_ancho(fig))
+    st.caption("Histogramas superpuestos por clase (se omite el 1 % de valores más altos para que se vea la forma).")
 
-    st.markdown("**Explorador de variables categóricas:**")
+    st.markdown(tema.seccion("Explorador de variables categóricas"), unsafe_allow_html=True)
     col_sel = st.selectbox(
         "Variable",
         CAT_COLS,
         format_func=lambda c: ETIQUETAS_VARIABLES.get(c, c),
         index=CAT_COLS.index("gill-color") if "gill-color" in CAT_COLS else 0,
     )
-    top = DF[col_sel].value_counts().head(12)
+    tabla = pd.crosstab(DF[col_sel].fillna("sin dato"), DF["class"])
+    tabla = tabla.loc[tabla.sum(axis=1).sort_values(ascending=False).index[:12]]
     mapa_sel = ETIQUETAS_CATEGORICAS.get(col_sel, {})
-    etiquetas_cat = [f"{k}\n({mapa_sel.get(k, k)})" for k in top.index]
-    fig, ax = plt.subplots(figsize=(8.5, 3.8))
-    ax.bar(etiquetas_cat, top.values, color="#ef6c00")
-    ax.set_title(f"Frecuencia de categorías — {ETIQUETAS_VARIABLES.get(col_sel, col_sel)} (top 12)", fontsize=12, fontweight="bold")
-    ax.set_ylabel("registros")
-    plt.tight_layout()
-    st.pyplot(fig)
+    etiquetas_cat = [mapa_sel.get(k, k) for k in tabla.index]
+    fig, ax = plt.subplots(figsize=(9, 0.38 * len(tabla) + 1.3))
+    comest = tabla.get("e", pd.Series(0, index=tabla.index)).to_numpy()
+    venen = tabla.get("p", pd.Series(0, index=tabla.index)).to_numpy()
+    ax.barh(etiquetas_cat, comest, color=LIQUEN, height=0.62, label="comestible")
+    ax.barh(etiquetas_cat, venen, left=comest, color=AMANITA, height=0.62, label="venenoso")
+    for i, (c, v) in enumerate(zip(comest, venen)):
+        ax.text(c + v, i, f"  {v / (c + v):.0%} venenoso", va="center", fontsize=8, color=MUSGO)
+    ax.invert_yaxis()
+    ax.set_title(f"{ETIQUETAS_VARIABLES.get(col_sel, col_sel)} · ejemplares por categoría (top 12)")
+    ax.set_xlabel("ejemplares")
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(axis="y", length=0, labelcolor=TIZA)
+    ax.set_xlim(0, (comest + venen).max() * 1.22)
+    ax.legend(loc="lower right")
+    st.pyplot(_fig_ancho(fig))
 
 # ================================================================== 6. FICHA TÉCNICA
-elif PAGINA == "📖 Ficha técnica y fórmulas":
-    st.subheader("Ficha técnica del modelo")
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Modelo", META["model_name"])
-    m2.metric("Clase del estimador", META.get("model_class", "—"))
-    m3.metric("Umbral τ*", f"{TAU:.2f}")
+elif NUMERO == "07":
+    st.markdown(tema.seccion("Identidad visual"), unsafe_allow_html=True)
+    c_logo1, c_logo2 = st.columns(2)
+    c_logo1.markdown(
+        f'<div style="background:{tema.SUPERFICIE};border:1px solid {LINEA};border-radius:14px;padding:28px">'
+        f'{LOGOS["logotipo"].read_text(encoding="utf-8")}</div>', unsafe_allow_html=True)
+    c_logo2.markdown(
+        f'<div style="background:{TIZA};border-radius:14px;padding:28px">'
+        f'{LOGOS["logotipo_claro"].read_text(encoding="utf-8")}</div>', unsafe_allow_html=True)
+    st.caption("La esporada: la huella radial que dejan las láminas de un hongo. Archivos en `app/assets/`.")
+
+    st.markdown(tema.seccion("Modelo"), unsafe_allow_html=True)
+    st.markdown(tema.cifras([
+        ("Modelo", META["model_name"], f"estimador {META.get('model_class', '—')}", ""),
+        ("Umbral τ*", f"{TAU:.2f}", f"franja incierta {FRANJA[0]:.2f}–{FRANJA[1]:.2f}", ""),
+        ("Variables", f"{len(TODAS_LAS_COLS)}", f"{META.get('num_features_encoded', '—')} tras One-Hot", ""),
+    ], columnas=3), unsafe_allow_html=True)
     st.caption(f"Criterio de selección: {META['selection_criteria']}")
 
     if CALIBRACION:
-        st.markdown("**Calibración del umbral de riesgo cero τ\\***")
+        st.markdown(tema.seccion("Calibración del umbral τ*"), unsafe_allow_html=True)
         detalle_franja = ""
         if "margin_to_edible" in CALIBRACION:
             franja_cv = CALIBRACION["cv_out_of_fold_band"]
@@ -1051,7 +1228,7 @@ elif PAGINA == "📖 Ficha técnica y fórmulas":
     with st.expander("Metadatos completos (model_metadata.json)"):
         st.json(META)
 
-    st.markdown("**Funcionalidades de la aplicación (criterio de rúbrica: ≥ 10):**")
+    st.markdown(tema.seccion("Funcionalidades de la aplicación"), unsafe_allow_html=True)
     st.markdown(
         "\n".join(
             f"{i}. {f}"
@@ -1071,6 +1248,9 @@ elif PAGINA == "📖 Ficha técnica y fórmulas":
                     "Descarga de resultados por lotes y plantilla CSV de ejemplo.",
                     "Ficha técnica y documentación matemática embebida.",
                     "Validación cruzada estratificada k-fold sin fuga de datos (pipeline por fold, test excluido).",
+                    "Detector de catálogo: dictamen solo si el espécimen encaja 20/20 en una especie conocida.",
+                    "Dictamen en tres estados (comestible, venenoso, incierto) con franja de incertidumbre.",
+                    "Validación agrupada por especie para medir el rendimiento con especies nuevas.",
                 ],
                 start=1,
             )

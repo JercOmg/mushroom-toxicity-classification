@@ -21,12 +21,20 @@ mushroom-toxicity-classification/
 │   ├── __init__.py
 │   ├── data_loader.py                  # Carga, validación y división de datasets
 │   ├── models.py                       # Definición de pipelines y modelos (Random Forest, etc.)
+│   ├── validation.py                   # Validación cruzada estratificada sin fuga de datos
+│   ├── especies.py                     # Catálogo de las 173 especies y detector de especímenes fuera de él
 │   └── utils.py                        # Métricas, matrices de confusión y gráficos
-├── app/                                # Interfaz de usuario interactiva
-│   └── app.py                          # Aplicación en Streamlit
+├── app/                                # Interfaz de usuario interactiva (ESPORA)
+│   ├── app.py                          # Aplicación en Streamlit
+│   ├── tema.py                         # Identidad visual: paleta, tipografía, estilos y componentes
+│   ├── assets/                         # Logos (isotipo, logotipo, favicon)
+│   └── models/                         # Metadatos del modelo (los .joblib se generan al entrenar)
+├── .streamlit/config.toml              # Tema oscuro de la app
 ├── docs/                               # Documentación del proyecto
 │   └── resultados_eda/                 # Tablas y gráficos generados por la inspección de datos
 ├── dataset_inspector.py                # Script de auditoría de datos (13 controles de calidad)
+├── recalibrar_umbral_cv.py             # Recalibra el umbral τ* con validación cruzada 5-fold
+├── validar_por_especie.py              # Mide el rendimiento con especies que el modelo no vio
 ├── .gitignore                          # Archivos y carpetas ignoradas por Git
 ├── README.md                           # Documentación principal
 └── requirements.txt                    # Dependencias del entorno
@@ -69,7 +77,37 @@ pip install -r requirements.txt
 python dataset_inspector.py
 ```
 
-### 4. Iniciar la aplicación interactiva (Streamlit)
+### 4. Entrenar el modelo (obligatorio la primera vez)
+Los modelos `.joblib` no se suben al repositorio (`.gitignore`), así que hay que generarlos. El orden importa:
+el notebook escribe un umbral provisional y los dos scripts lo corrigen y completan los metadatos.
+```bash
+cd notebooks
+jupyter nbconvert --to notebook --execute 03_model_training.ipynb --output 03_model_training.executed.ipynb
+cd ..
+python recalibrar_umbral_cv.py
+python validar_por_especie.py
+```
+
+### 5. Iniciar la aplicación interactiva (Streamlit)
+Ejecutar desde la raíz del repositorio para que cargue el tema de `.streamlit/config.toml`:
 ```bash
 streamlit run app/app.py
 ```
+
+---
+
+## 🔬 Cómo decide la app
+
+El modelo acierta el 100 % con **especies que ya vio**, pero con especies nuevas (validación cruzada
+agrupada por especie) baja a ~62 % de accuracy y ROC-AUC 0,64: reconoce especies, no «entiende» la toxicidad.
+Por eso el dictamen tiene tres estados:
+
+| Dictamen | Cuándo |
+|---|---|
+| **Venenoso** | El espécimen encaja 20/20 en una especie conocida y P(venenoso) ≥ franja superior |
+| **Comestible** | Encaja 20/20 en una especie conocida y P(venenoso) ≤ franja inferior |
+| **Incierto** | No encaja en ninguna especie del catálogo, o P(venenoso) cae en la franja sin datos de entrenamiento |
+
+Con especies desconocidas solo el 0,62 % de los ejemplares pasa el filtro del catálogo, y entre ellos no hubo
+venenosos tomados por comestibles. Es un proyecto académico sobre datos simulados: **no sirve para decidir si
+un hongo silvestre se puede comer**.

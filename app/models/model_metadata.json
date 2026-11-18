@@ -62,7 +62,7 @@
         },
         "test_min_proba_poisonous": 0.67,
         "test_max_proba_edible": 0.34,
-        "calibrated_at": "2026-11-16T16:04:01"
+        "calibrated_at": "2026-11-17T19:41:55"
     },
     "classes": {
         "0": "edible",
@@ -93,7 +93,7 @@
         "season"
     ],
     "num_features_encoded": 128,
-    "trained_at": "2026-10-01T15:42:23",
+    "trained_at": "2026-11-17T19:40:29",
     "validation_metrics": [
         {
             "Model": "Logistic Regression",
@@ -103,7 +103,7 @@
             "F1-Score": 0.8806559968385694,
             "FN (Falsos Negativos)": 626,
             "FP (Falsos Positivos)": 582,
-            "Train Time (s)": 1.45
+            "Train Time (s)": 3.84
         },
         {
             "Model": "Random Forest",
@@ -113,17 +113,17 @@
             "F1-Score": 1.0,
             "FN (Falsos Negativos)": 0,
             "FP (Falsos Positivos)": 0,
-            "Train Time (s)": 1.25
+            "Train Time (s)": 3.6
         },
         {
             "Model": "XGBoost",
-            "Accuracy": 0.9935589519650655,
-            "Precision": 0.9978200554894966,
-            "Recall (Poisonous)": 0.9905567578201849,
-            "F1-Score": 0.9941751406851614,
-            "FN (Falsos Negativos)": 48,
-            "FP (Falsos Positivos)": 11,
-            "Train Time (s)": 2.14
+            "Accuracy": 0.9948689956331878,
+            "Precision": 0.998811410459588,
+            "Recall (Poisonous)": 0.9919338973047412,
+            "F1-Score": 0.9953607738624025,
+            "FN (Falsos Negativos)": 41,
+            "FP (Falsos Positivos)": 6,
+            "Train Time (s)": 1.13
         },
         {
             "Model": "MLP Neural Network",
@@ -133,7 +133,7 @@
             "F1-Score": 1.0,
             "FN (Falsos Negativos)": 0,
             "FP (Falsos Positivos)": 0,
-            "Train Time (s)": 3.73
+            "Train Time (s)": 7.15
         }
     ],
     "test_metrics": [
@@ -146,7 +146,7 @@
             "ROC-AUC": 0.9363477005488563,
             "FN (Falsos Negativos)": 619,
             "FP (Falsos Positivos)": 599,
-            "Train Time (s)": 1.45
+            "Train Time (s)": 3.84
         },
         {
             "Model": "Random Forest",
@@ -157,18 +157,18 @@
             "ROC-AUC": 1.0,
             "FN (Falsos Negativos)": 0,
             "FP (Falsos Positivos)": 0,
-            "Train Time (s)": 1.25
+            "Train Time (s)": 3.6
         },
         {
             "Model": "XGBoost",
-            "Accuracy": 0.9939962886147801,
-            "Precision": 0.9978222134230845,
-            "Recall (Poisonous)": 0.991345397324941,
-            "F1-Score": 0.994573260976813,
-            "ROC-AUC": 0.9999018211003872,
-            "FN (Falsos Negativos)": 44,
-            "FP (Falsos Positivos)": 11,
-            "Train Time (s)": 2.14
+            "Accuracy": 0.9944329221700687,
+            "Precision": 0.9984155278272925,
+            "Recall (Poisonous)": 0.9915420928402833,
+            "F1-Score": 0.9949669397019639,
+            "ROC-AUC": 0.9998906764685392,
+            "FN (Falsos Negativos)": 43,
+            "FP (Falsos Positivos)": 8,
+            "Train Time (s)": 1.13
         },
         {
             "Model": "MLP Neural Network",
@@ -179,7 +179,7 @@
             "ROC-AUC": 1.0,
             "FN (Falsos Negativos)": 0,
             "FP (Falsos Positivos)": 0,
-            "Train Time (s)": 3.73
+            "Train Time (s)": 7.15
         }
     ],
     "best_model_test_metrics": {
@@ -191,7 +191,7 @@
         "ROC-AUC": 1.0,
         "FN (Falsos Negativos)": 0,
         "FP (Falsos Positivos)": 0,
-        "Train Time (s)": 1.25
+        "Train Time (s)": 3.6
     },
     "best_model_confusion_matrix_test": {
         "tn": 4077,
@@ -388,5 +388,49 @@
         "veil-color": 0.009189234101872872,
         "veil-type": 0.009154471895091665
     },
-    "global_importance_method": "Media de |contribución de camino| del Random Forest agrupada por variable original (300 especímenes de test)"
+    "global_importance_method": "Media de |contribución de camino| del Random Forest agrupada por variable original (300 especímenes de test)",
+    "species_validation": {
+        "method": "StratifiedGroupKFold k=5 con la especie como grupo (173 especies × 353 ejemplares; especie = fila // 353, verificado contra primary_data.csv). Ninguna especie se usa a la vez para entrenar y validar.",
+        "n_species": 173,
+        "threshold": 0.52,
+        "unseen_species": {
+            "n": 61069,
+            "accuracy": 0.6170724917716026,
+            "fn": 12547,
+            "fp": 10838,
+            "fn_rate": 0.37024905571293676,
+            "roc_auc": 0.641977994613037,
+            "species_poisonous_missed": 39,
+            "species_poisonous_total": 96,
+            "species_edible_discarded": 31,
+            "species_edible_total": 77
+        },
+        "catalog_detector": {
+            "rule": "Dictamen solo si el espécimen encaja 20/20 en el perfil de alguna especie conocida.",
+            "numeric_margin": 0.1,
+            "known_rows_in_catalog": 1.0,
+            "unseen_rows_passing": 0.006222469665460381,
+            "unseen_best_match_distribution": {
+                "10": 7,
+                "11": 210,
+                "12": 477,
+                "13": 1762,
+                "14": 6308,
+                "15": 15186,
+                "16": 16802,
+                "17": 12430,
+                "18": 6197,
+                "19": 1310,
+                "20": 380
+            },
+            "errors_on_passing_rows": {
+                "n": 380,
+                "accuracy": 1.0,
+                "fn": 0,
+                "fp": 0,
+                "fn_rate": 0.0
+            }
+        },
+        "computed_at": "2026-11-17T19:53:36"
+    }
 }
